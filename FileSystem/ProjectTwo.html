@@ -1,0 +1,373 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Contact Book</title>
+     <link href="Default.css" rel="stylesheet" />
+
+    <script src="Scripts/jquery-3.4.1.js"></script>
+    <link href="FileUploadShare.css" rel="stylesheet" />
+    <script>
+
+        var requestedBytes = 1024 * 1024 * 1024;
+
+        navigator.webkitPersistentStorage.requestQuota(
+            requestedBytes, function (grantedBytes) {
+                console.log('we were granted ', grantedBytes, 'bytes');
+
+            }, function (e) { console.log('Error', e); }
+        );
+
+        window.indexedDB = window.indexedDB || window.mozIndexedDB || window.
+            webkitIndexedDB || window.msIndexedDB;
+        window.IDBTransaction = window.IDBTransaction || window.webkitIDBTransaction;
+        window.IDBCursor = window.IDBCursor || window.webkitIDBCursor;
+        window.requestFileSystem = window.requestFileSystem || window.webkitRequestFileSystem;
+
+
+        $(document).ready(function () {
+            contactsNamespace.initialize();
+        });
+        (function () {
+            this.contactsNamespace = this.contactsNamespace || {};
+            var ns = this.contactsNamespace;
+            var db;
+            var currentRecord;
+            var msg = {};
+
+            var readMsg = {};
+
+            ns.initialize = function () {
+
+                var request = indexedDB.open('Chapter18', 1);
+                request.onupgradeneeded = function (response) {
+                    var options = { keypath: 'id', autoIncrement: true };
+                    response.currentTarget.result.createObjectStore("uploadFileList", options);
+                };
+                request.onsuccess = function (response) {
+                    db = request.result;
+                    ns.display();
+                };
+
+                $('#btnImageFile').on('change', function (e) {
+                    var file = e.originalEvent.target.files[0];
+                    var reader = new FileReader();
+                    reader.onloadend = function (evt) {
+
+                        console.log('------------------------------------------------');
+
+                        console.log(evt.target.result);
+
+                        msg = { fileType: file.name, file: evt.target.result, type: file.type };
+
+
+                        var trans = db.transaction('uploadFileList', 'readwrite');
+                        var uploadFileLists = trans.objectStore("uploadFileList");
+                        var uploadFileList = {};
+                        uploadFileList.fileType = msg.fileType;
+                        uploadFileList.type = msg.type;
+
+                        console.log('this is what is uploaded ' + uploadFileList.type);
+
+                        var request = uploadFileLists.add(uploadFileList);
+                        request.onsuccess = function (response) {
+                            msg.fileType = msg.fileType;
+                            localStorage.setItem("fileToSave", JSON.stringify(msg));
+                            window.requestFileSystem(window.PERSISTENT, 25*1024 * 1024, getFile, handleError);
+                            ns.display();
+                        };
+
+                    };
+                    reader.readAsDataURL(file);
+                    //e.originalEvent.target.files[0] = null;
+
+
+                })
+
+
+
+
+            };
+
+
+
+            function getFile(fileSystem) {
+                var tempMsg = JSON.parse(localStorage.getItem("fileToSave"));
+
+                fileSystem.root.getFile(tempMsg.fileType, { create: true }, fileOpened, handleError);
+            }
+            function fileOpened(fileEntry) {
+                fileEntry.createWriter(writeToFile, handleError);
+            }
+
+            function stringToBinary(response) {
+                var byteArray = new Uint8Array(response.length);
+                for (var i = 0; i < response.length; i++) {
+                    byteArray[i] = response.charCodeAt(i) & 0xff;
+                }
+                return byteArray
+            }
+
+            function writeToFile(fileWriter) {
+
+                fileWriter.onwriteend = function () { alert('Success'); };
+                fileWriter.onerror = function () { alert('Failed'); };
+                var tempMsg = JSON.parse(localStorage.getItem("fileToSave"));
+                var arr = tempMsg.file.split(',')[1];
+                if (isImageType(tempMsg.fileType)) {
+                    var blobFile = new Blob([arr], { type: msg.type });
+                    fileWriter.write(blobFile);
+                } else {
+
+                    var blobFile = new Blob([atob(arr)], { type: msg.type });
+                    fileWriter.write(blobFile);
+
+                }
+                
+               
+                
+            }
+            function handleError(error) {
+                alert(error.code);
+            }
+
+
+
+            function retrieveFromStorage() {
+                var contactsJSON = localStorage.getItem('contacts');
+                return contactsJSON ? JSON.parse(contactsJSON) : [];
+            }
+            ns.display = function () {
+                $('#currentAction').html('File Adding');
+                msg = {};
+
+                var trans = db.transaction('uploadFileList', 'readonly');
+                var request = trans.objectStore("uploadFileList").openCursor();
+                var results = [];
+                request.onsuccess = function (response) {
+                    var cursor = response.target.result;
+                    if (!cursor) {
+                        bindToGrid(results);
+                        return;
+                    }
+                    results.push({ key: cursor.key, uploadFileList: cursor.value });
+                    cursor.continue();
+                };
+            }
+
+
+
+            function bindToGrid(results) {
+                var html = '';
+
+                for (var i = 0; i < results.length; i++) {
+                    var key = results[i].key;
+                    var uploadFileList = results[i].uploadFileList;
+
+                    if (uploadFileList.fileType != 'undefined' && uploadFileList.type != 'undefined') {
+                        html += '<tr><td>' + uploadFileList.fileType + '</td>';
+                        html += '<td>' + uploadFileList.type + '</td>';
+                        html += '<td><a class="download" href="javascript:void(0)" data-key=' + key + '>Show</a></td><td><a class="delete" href="javascript:void(0)" data-key=' + key + '>Delete</a></td></tr>';
+
+                    }
+                }
+                html = html || '<tr><td colspan="4">No records available</td></tr>';
+                $('#uploadFileLists tbody').html(html);
+                $('#uploadFileLists a.delete').on('click', ns.deleteContact);
+                $('#uploadFileLists a.download').on('click', ns.DownloadFile);
+            }
+
+
+
+
+
+            function isInArray(value, array) {
+                return array.indexOf(value) > -1;
+            }
+
+
+
+
+            ns.deleteContact = function () {
+
+                var key = parseInt($(this).attr('data-key'));
+
+                var transGet = db.transaction('uploadFileList', 'readonly');
+                var storeGet = transGet.objectStore("uploadFileList");
+                var requestGet = storeGet.get(key);
+                var deleteFileType = '';
+                requestGet.onsuccess = function (response) {
+
+                    deleteFileType = response.target.result.fileType;
+
+                }
+
+                var trans = db.transaction('uploadFileList', 'readwrite');
+                var store = trans.objectStore("uploadFileList");
+                var request = store.delete(key);
+                request.onsuccess = function (response) {
+                    $('#currentAction').html('Delete Contact');
+                    window.requestFileSystem(window.PERSISTENT, 25 * 1024 * 1024, getFileDelete, handleErrorDelete);
+                    ns.display();
+                    $('#showImage').html('');
+
+                };
+
+                request.onerror = function (response) {
+
+                    alert("Not deleted")
+                };
+            };
+
+
+           
+            function getFileDelete(fileSystem) { fileSystem.root.getFile(deleteFileType, { create: true }, fileOpenedDelete, handleErrorDelete); }
+            function fileOpenedDelete(fileEntry) { fileEntry.remove(fileRemovedDelete, handleErrorDelete); }
+            function fileRemovedDelete() { alert('Success'); }
+            function handleErrorDelete(error) { alert('Failed'); } 
+
+            ns.DownloadFile = function () {
+                var key = parseInt($(this).attr('data-key'));
+                var trans = db.transaction('uploadFileList', 'readonly');
+                var store = trans.objectStore("uploadFileList");
+                var request = store.get(key);
+                request.onsuccess = function (response) {
+                    $('#currentAction').html('Download File');
+                    var uploadFileListVar = response.target.result;
+                    msg = { fileType: uploadFileListVar.fileType, file: null, type: uploadFileListVar.type };
+                    window.requestFileSystem(window.PERSISTENT, 25*1024 * 1024, getFileRead, handleErrorRead);
+
+                };
+
+                request.onerror = function (response) {
+
+                    alert("Error in downloding data");
+                };
+            };
+
+            function getFileRead(fileSystem) {
+                
+                fileSystem.root.getFile(msg.fileType, { create: true }, fileOpenedRead, handleErrorRead);
+            }
+            function fileOpenedRead(fileEntry) {
+
+                fileEntry.file(readFileRead, handleErrorRead);
+            }
+
+
+            function base64toFile(dataurl, filename) {
+
+                var arr = dataurl.split(','),
+                    mime = arr[0].match(/:(.*?);/)[1],
+                    bstr = atob(arr[1]),
+                    n = bstr.length,
+                    u8arr = new Uint8Array(n);
+
+                console.log('--------------------------*******************************************************************----------------------');
+                console.log(bstr);
+
+                while (n--) {
+                    u8arr[n] = bstr.charCodeAt(n);
+                }
+
+                var createFile = new File([u8arr], filename, { type: mime });
+
+                console.log(createFile);
+
+                return createFile;
+            }
+
+
+            function readFileRead(file) {
+
+                var fileReader = new FileReader();
+                fileReader.onloadend = function () {
+
+                    msg.file = this.result;
+                    $('#showImage').html('');
+                    if (isImageType(msg.fileType)) {     
+                        var imageData = atob(msg.file.split(',')[1]);
+                        var imgSource = 'data:' + msg.type + ';base64,' + imageData;         
+                        $('#showImage').append('<br/><a target="_blank" href="' + imgSource + '" download><img src="' + imgSource + '"></img>' + msg.fileType+'</a>');                   
+                    } else {    
+                        var arr = msg.file.split(',');
+                        var mime = arr[0].match(/:(.*?);/)[1];
+                      
+                        var bstr = arr[1];
+                        let blobData = new Blob([atob(bstr)], { type: msg.type });
+                        $('#showImage').append('<br/><a target="_blank" href="' + window.URL.createObjectURL(blobData) + '" download >' + msg.fileType + '</a>');
+
+                      
+
+                    }
+                };
+
+                fileReader.onerror = function () { alert('Failed'); };
+                fileReader.readAsDataURL(file);
+            }
+            function handleErrorRead(error) {
+                alert(error.code);
+            }
+
+            function isImageType(fileType) {
+                var idxDot = fileType.lastIndexOf(".") + 1;
+                var extFile = fileType.substr(idxDot, fileType.length).toLowerCase();
+                if (extFile == "jpg" || extFile == "jpeg" || extFile == "png" || extFile == "gif") {
+                    return true;
+                } else {
+                    return false;
+                }
+            }
+
+        })();
+
+    </script>
+</head>
+<body>
+
+    <table width="100">
+        <tr>
+            <td width="50%">
+                <div id="container">
+                    <header>
+                        <hgroup id="headerText">
+                            <h1>File List</h1>
+                        </hgroup>
+                    </header>
+                    <div role="main">
+
+                        <table id="uploadFileLists">
+                            <thead>
+                                <tr>
+                                    <th>File Name</th>
+                                    <th>Type</th>
+                                    <th>View Content</th>
+                                    <th>Delete Content</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                        <div id="editContact">
+                            <h2 id="currentAction"></h2>
+
+
+                            <label class="btn btn-default btn-file" id='btnImageFile' title="Upload File" style="border-color:deeppink">
+                                Add Items <input type="file" id="btnImageFile" style="display: none;">
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </td>
+            <td width="50%">
+                
+                    <div id="showImage" />
+               
+            </td>
+        </tr>
+    </table>
+
+   
+
+
+   
+</body>
+</html>
